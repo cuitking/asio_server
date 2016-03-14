@@ -1,0 +1,134 @@
+
+#ifndef ST_SERVICE_THREAD_NUM
+#define ST_SERVICE_THREAD_NUM 8
+同时开启多少个线程执行boost::asio::io_service::run函数。
+#endif
+
+namespace st_asio_wrapper
+{
+
+对io_service的包装，用于启动st_asio_wrapper里面的service（实现了i_service的所有对象）。
+class st_service_pump : public boost::asio::io_service
+{
+public:
+	class i_service
+	{
+	protected:
+		i_service(st_service_pump& service_pump_);
+		virtual ~i_service();
+
+	public:
+		void start_service();
+启动service（调用init），如果service已经启动，则调用没有任何作用。
+		void stop_service();
+停止service（调用uninit），如果service已经停止，则调用没有任何作用。
+		bool is_started() const;
+判断service是否已经启动。
+
+		void id(int id);
+		int id() const;
+设置／获取service的id，用不用id或者怎么使用id，由使用者决定，st_asio_wrapper目前未使用service id，
+如果你需要查找service，则最好启用它。
+
+		void user_data(void* data_);
+		void* user_data() const;
+用户数据，用不用或者怎么使用请发挥想象，st_asio_wrapper库本身并不使用这个值，也不管理其生命周期。
+
+		st_service_pump& get_service_pump();
+		const st_service_pump& get_service_pump() const;
+获取st_service_pump对象。
+
+	protected:
+		virtual void init() = 0;
+		virtual void uninit() = 0;
+继承者实现，在启动／停止service的时候，st_service_pump会调用。
+
+	protected:
+		st_service_pump& service_pump;
+
+	private:
+		bool started;
+		int id_;
+		void* data;
+	};
+
+public:
+	typedef i_service* object_type;
+	typedef const object_type object_ctype;
+	typedef boost::container::list<object_type> container_type;
+
+	st_service_pump();
+
+	i_service* find(int id);
+根据id查找service。
+
+	void remove(object_type i_service_);
+	void remove(int id);
+删除指定的service（调用stop_and_free）。
+
+	void clear();
+删除所有service（调用stop_and_free）。
+
+	void start_service(int thread_num = ST_SERVICE_THREAD_NUM);
+	void stop_service();
+启动／停止service（调用end_service），thread_num是线程数量（用于调用io_service::run）。
+
+	void force_stop_service();
+先尝试正常结束所有service（调用i_service::stop_service），如果不能成功结束所有service，则强制结束service（调用io_service::stop）。
+
+	void start_service(object_type i_service_, int thread_num = ST_SERVICE_THREAD_NUM);
+	void stop_service(object_type i_service_);
+如果某个service是在前面那个start_service之后才添加的，则调用这个启动它，否则功能完全同前面那个start_service，这也是为什么带了
+thread_num这个看似无关的参数。
+stop_service停止指定的service，跟前面的stop_service一样，差别仅是前面的停止所有service。
+
+	bool is_running() const;
+等效于　!io_service::stopped()
+
+	bool is_service_started() const;
+是否已经调用过了start_service(int thread_num)。
+
+	void run_service(int thread_num = ST_SERVICE_THREAD_NUM);
+	void end_service();
+end_service完全同stop_service，其实stop_service就是直接调用end_service。
+run_service同start_service，但是会阻塞，直到所有线程（调用io_service::run的线程）都退出，所以end_service必须在另外的线程中调用。
+其实start_service(int thread_num)就是创建了一个线程，在这个线程中执行run_service，然后自己马上退出而已。
+
+protected:
+	void stop_and_free(object_type i_service_);
+调用i_service::stop_service，然后调用st_service_pump::free。
+
+	virtual void free(object_type i_service_);
+重写这个以释放指定的i_service，如果需要的话。注意，就算你是在堆上分配的i_service，也不一定需要释放它，只要你的service的生命周期跟
+进程一样，就不需要释放。这个函数目前是空的，什么也不做，st_asio_wrapper自带的demo都没有重写这个函数。
+
+#ifdef ENHANCED_STABILITY
+	virtual bool on_exception(const std::exception& e);
+包在io_service::run外面的try捕捉到了异常后调用，返回true代表忽略这个异常，返回false表现结束这个io_service::run。
+
+	size_t run(error_code& ec);
+内部使用的helper函数，在io_service::run外面用try包裹。
+#endif
+
+	template<typename _Predicate> void do_something_to_all(const _Predicate& __pred);
+	template<typename _Predicate> void do_something_to_one(const _Predicate& __pred);
+与st_timer的同名函数类似。
+
+private:
+	void add(object_type i_service_);
+添加一个service，由i_service使用。
+
+	void do_service(int thread_num);
+run_service使用，正确的创建线程并且执行run。
+
+protected:
+	container_type service_can;
+	boost::shared_mutex service_can_mutex;
+	boost::thread service_thread;
+这个线程运行着run_service（如果你的服务是通过start_service启动的话）。
+	bool started;
+};
+
+} //namespace
+
+
